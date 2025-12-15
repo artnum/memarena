@@ -199,21 +199,60 @@ void *mem_realloc(mem_arena_t *arena, void *ptr, size_t new_size) {
   return new_ptr;
 }
 
+static void _move_empty_region_to_end(mem_arena_t *arena,
+                                      mem_arena_region_t *region,
+                                      mem_arena_region_t **prev) {
+  /* it's the only region so it gets reused next alloc */
+  if (region == arena->head && region->next == NULL) {
+    arena->tail = region;
+    return;
+  }
+  /* disconnect region */
+  if (prev) {
+    *prev = region->next;
+  }
+  region->next = NULL;
+
+  /* put region after tail so it can get picked for allocation */
+  mem_arena_region_t *tail = arena->tail;
+  while (tail->next != NULL) {
+    tail = tail->next;
+  }
+  tail->next = region;
+
+  if (region == arena->head) {
+    arena->head = region->next;
+  }
+}
+
 void mem_free(mem_arena_t *arena, void *ptr) {
   if (arena == NULL || ptr == NULL) {
     return;
   }
+
   mem_arena_region_t **region = &arena->head, **prev = NULL;
 
   /* find which region pointer belong */
-  while (*region != NULL && ptr >= (void *)(*region)->data &&
-         ptr < (void *)(*region)->data) {
+  while (*region != NULL &&
+         !(ptr >= (void *)(*region)->data &&
+           ptr < (void *)((*region)->data + (*region)->used))) {
     prev = region;
     region = (mem_arena_region_t **)&(*region)->next;
   }
+  /* ptr doesn't belong to us */
+  if (*region == NULL) {
+    return;
+  }
 
-  /* should not happend */
-  if (!*region) {
+  if ((*region)->last_alloc == ptr) {
+    size_t *old_size =
+        (size_t *)((uint8_t *)ptr - ALIGNED_SIZE(sizeof(size_t)));
+    (*region)->used -= *old_size;
+    (*region)->alloc_cnt--;
+    (*region)->last_alloc = NULL;
+    if ((*region)->alloc_cnt <= 0) {
+      _move_empty_region_to_end(arena, *region, prev);
+    }
     return;
   }
 
@@ -226,27 +265,7 @@ void mem_free(mem_arena_t *arena, void *ptr) {
   if ((*region)->alloc_cnt <= 0) {
     (*region)->alloc_cnt = 0;
     (*region)->used = 0;
-    /* it's the only region so it gets reused next alloc */
-    if (*region == arena->head && (*region)->next == NULL) {
-      arena->tail = *region;
-      return;
-    }
-    /* disconnect region */
-    if (prev) {
-      *prev = (*region)->next;
-    }
-    (*region)->next = NULL;
-
-    /* put region after tail so it can get picked for allocation */
-    mem_arena_region_t *tail = arena->tail;
-    while (tail->next != NULL) {
-      tail = tail->next;
-    }
-    tail->next = *region;
-
-    if (*region == arena->head) {
-      arena->head = (*region)->next;
-    }
+    _move_empty_region_to_end(arena, *region, prev);
   }
 }
 

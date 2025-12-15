@@ -140,6 +140,53 @@ START_TEST(test_memarena_free_reuse) {
 }
 END_TEST
 
+START_TEST(test_memarena_free_reuse_bug_region1) {
+  mem_arena_t *arena = mem_arena_new(getpagesize());
+  /* fill just one region */
+  void *p = NULL;
+  while (arena->head == NULL || arena->head->next == NULL) {
+    p = mem_alloc(arena, getpagesize() / 4);
+    ck_assert_ptr_nonnull(p);
+  }
+
+  /* last p is first allocation of second page */
+  int i = 1;
+  void *ptr[100] = {p};
+  mem_arena_region_t *p0 = arena->tail; /* save page 0 for later use */
+  while (arena->tail == p0) {
+    ptr[i] = mem_alloc(arena, getpagesize() / 4);
+    ck_assert_ptr_nonnull(ptr[i]);
+    i++;
+  }
+  int total_region_cnt = i + 1;
+
+  /* this will add one region as tail */
+  mem_arena_region_t *p1 = arena->tail; /* save page 0 for later use */
+  while (arena->tail == p1) {
+    void *p = mem_alloc(arena, getpagesize() / 4);
+    ck_assert_ptr_nonnull(p);
+  }
+  // ck_assert_ptr_ne(arena->tail, arena->head);
+  /* free the first region */
+  for (int i = 0; i < total_region_cnt; i++) {
+    mem_free(arena, ptr[i]);
+  }
+  /* check region */
+  ck_assert_int_eq(p0->alloc_cnt, 0);
+  ck_assert_ptr_null(p0->last_alloc);
+
+  mem_arena_region_t *tail = arena->tail;
+  while (tail->next != NULL) {
+    tail = tail->next;
+  }
+
+  /* we should have p0 as last ->next of tail, tail should not be arena->tail */
+  ck_assert_ptr_eq(tail, p0);
+  ck_assert_ptr_ne(tail, arena->tail);
+  mem_arena_destroy(arena);
+}
+END_TEST
+
 Suite *test_memarena_suite(void) {
   Suite *s;
   s = suite_create("Memarena Test");
@@ -163,6 +210,12 @@ Suite *test_memarena_suite(void) {
   TCase *tc_freereuse = tcase_create("Free reuse");
   tcase_add_test(tc_freereuse, test_memarena_free_reuse);
   suite_add_tcase(s, tc_freereuse);
+
+  TCase *tc_freereuse_bugr1 =
+      tcase_create("Free reuse (bug if region is not first)");
+  tcase_add_test(tc_freereuse_bugr1, test_memarena_free_reuse_bug_region1);
+  suite_add_tcase(s, tc_freereuse_bugr1);
+
   return s;
 }
 
