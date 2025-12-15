@@ -137,6 +137,7 @@ void mem_arena_destroy(mem_arena_t *arena) {
   }
 }
 
+/* TODO : take care of INT_MAX ... */
 void *mem_alloc(mem_arena_t *arena, size_t size) {
   if (!arena || size < 1) {
     return NULL;
@@ -199,6 +200,10 @@ void *mem_realloc(mem_arena_t *arena, void *ptr, size_t new_size) {
   return new_ptr;
 }
 
+/* TODO : think if I should have a pointer in the region to point to the
+ * real tail, so I skip going through some region to move it to the end. If
+ * so, do this modification ... but I wonder about adding more pointer.
+ */
 static void _move_empty_region_to_end(mem_arena_t *arena,
                                       mem_arena_region_t *region,
                                       mem_arena_region_t **prev) {

@@ -87,8 +87,14 @@ void mem_arena_dump(mem_arena_t *arena);
 void *mem_alloc(mem_arena_t *arena, size_t size);
 /** Realloc but with arena */
 void *mem_realloc(mem_arena_t *arena, void *ptr, size_t new_size);
-/** Free but with arena
- * Don't really do anything as it's a bump arena.
+/**
+ * Free
+ * Try to reclaim a region if possible. Useful when working with dynamic
+ * array as mmap'd region can be reclaimed in some case. Allocation keep
+ * count and if it happen that a region has seen as many mem_free as
+ * mem_alloc, the region is considered empty and will be recycled later on.
+ * Also, as realloc, if free is done on a last allocation of a region, it
+ * gives back the space to the region.
  */
 void mem_free(mem_arena_t *arena, void *ptr);
 
