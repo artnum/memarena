@@ -117,6 +117,7 @@ void mem_arena_reset(mem_arena_t *arena) {
   for (mem_arena_region_t *r = arena->head; r;
        r = (mem_arena_region_t *)r->next) {
     r->used = 0;
+    r->alloc_cnt = 0;
   }
 }
 
