@@ -96,4 +96,6 @@ char *mem_strndup(mem_arena_t *arena, const char *string, size_t length);
 /** Strdup but with arena */
 char *mem_strdup(mem_arena_t *arena, const char *string);
 
+/** */
+void *mem_memdup(mem_arena_t *arena, const void *ptr, size_t length);
 #endif /* MEMARENA_H__ */

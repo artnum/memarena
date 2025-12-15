@@ -235,3 +235,14 @@ char *mem_strdup(mem_arena_t *arena, const char *string) {
   }
   return new_str;
 }
+
+void *mem_memdup(mem_arena_t *arena, const void *ptr, size_t length) {
+  if (arena == NULL || ptr == NULL || length <= 0) {
+    return 0;
+  }
+  void *new_ptr = mem_alloc(arena, length);
+  if (new_ptr) {
+    memcpy(new_ptr, ptr, length);
+  }
+  return new_ptr;
+}
