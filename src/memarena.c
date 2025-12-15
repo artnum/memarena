@@ -256,11 +256,6 @@ void mem_free(mem_arena_t *arena, void *ptr) {
     return;
   }
 
-  /* no more last alloc */
-  if ((*region)->last_alloc == ptr) {
-    (*region)->last_alloc = NULL;
-  }
-
   (*region)->alloc_cnt--;
   if ((*region)->alloc_cnt <= 0) {
     (*region)->alloc_cnt = 0;
