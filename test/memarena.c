@@ -32,7 +32,6 @@ START_TEST(test_memarena_malloc) {
   uint8_t *ptr = mem_alloc(arena, 12);
   ck_assert_int_eq(*(size_t *)(ptr - asize), 12);
   mem_free(arena, ptr);
-  ck_assert_int_eq(*(size_t *)(ptr - asize), 0);
 
   mem_arena_destroy(arena);
 }
@@ -55,7 +54,6 @@ START_TEST(test_memarena_realloc) {
   ck_assert_int_eq(*(size_t *)(ptr - asize), 24);
   ck_assert_ptr_eq(ptr, ptr2);
   mem_free(arena, ptr);
-  ck_assert_int_eq(*(size_t *)(ptr - asize), 0);
 
   /*** test realloc with copying memory, we do 2 alloc so last alloc is not the
    * one we realloc, the realloc must copy memory to new pointer */
@@ -103,6 +101,45 @@ START_TEST(test_memarena_memdup) {
 }
 END_TEST
 
+START_TEST(test_memarena_free_reuse) {
+  mem_arena_t *arena = mem_arena_new(getpagesize());
+  void *ptr[100] = {0};
+  /* fill just one region */
+  int i = 0;
+  while (arena->head == NULL || arena->head->next == NULL) {
+    ptr[i] = mem_alloc(arena, getpagesize() / 4);
+    ck_assert_ptr_nonnull(ptr[i]);
+    i++;
+  }
+  int total_region_cnt = i;
+  mem_arena_region_t *p0 = arena->head; /* save page 0 for later use */
+
+  /* this will add one region as tail */
+  while (arena->tail->next != NULL) {
+    void *p = mem_alloc(arena, getpagesize() / 4);
+    ck_assert_ptr_nonnull(p);
+  }
+  // ck_assert_ptr_ne(arena->tail, arena->head);
+  /* free the first region */
+  for (int i = 0; i < total_region_cnt; i++) {
+    mem_free(arena, ptr[i]);
+  }
+  /* check region */
+  ck_assert_int_eq(p0->alloc_cnt, 0);
+  ck_assert_ptr_null(p0->last_alloc);
+
+  mem_arena_region_t *tail = arena->tail;
+  while (tail->next != NULL) {
+    tail = tail->next;
+  }
+
+  /* we should have p0 as last ->next of tail, tail should not be arena->tail */
+  ck_assert_ptr_eq(tail, p0);
+  ck_assert_ptr_ne(tail, arena->tail);
+  mem_arena_destroy(arena);
+}
+END_TEST
+
 Suite *test_memarena_suite(void) {
   Suite *s;
   s = suite_create("Memarena Test");
@@ -122,6 +159,10 @@ Suite *test_memarena_suite(void) {
   TCase *tc_memdup = tcase_create("Memdup");
   tcase_add_test(tc_memdup, test_memarena_memdup);
   suite_add_tcase(s, tc_memdup);
+
+  TCase *tc_freereuse = tcase_create("Free reuse");
+  tcase_add_test(tc_freereuse, test_memarena_free_reuse);
+  suite_add_tcase(s, tc_freereuse);
   return s;
 }
 

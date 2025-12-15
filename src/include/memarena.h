@@ -11,6 +11,7 @@
 typedef struct {
   unsigned char *data;
   unsigned char *last_alloc;
+  int alloc_cnt;
   size_t capacity;
   size_t used;
   void *next;

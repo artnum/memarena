@@ -6,7 +6,7 @@ RM=rm
 all: memarena
 
 memarena: memarena.c ../src/memarena.c
-	$(CC) $(CFLAGS)  memarena.c ../src/memarena.c -o memarena $(LIBS)
+	$(CC) $(CFLAGS)  memarena.c ../src/memarena.c -o memarena $(LIBS) -ggdb
 
 clean:
 	$(RM) memarena

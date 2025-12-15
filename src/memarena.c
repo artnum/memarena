@@ -29,6 +29,7 @@ static mem_arena_region_t *_new_region(int size, int pagesize) {
                                     MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
   if (region != MAP_FAILED) {
     size_t head_size = ALIGNED_SIZE(sizeof(*region));
+    region->alloc_cnt = 0;
     region->data = (unsigned char *)region + head_size;
     region->capacity = size - head_size;
     region->used = 0;
@@ -159,6 +160,7 @@ void *mem_alloc(mem_arena_t *arena, size_t size) {
     ptr = (*region)->data + (*region)->used + ALIGNED_SIZE(sizeof(size_t));
     (*region)->used += size + ALIGNED_SIZE(sizeof(size_t));
     (*region)->last_alloc = ptr;
+    (*region)->alloc_cnt++;
     arena->tail = *region;
   }
   return (void *)ptr;
@@ -201,8 +203,51 @@ void mem_free(mem_arena_t *arena, void *ptr) {
   if (arena == NULL || ptr == NULL) {
     return;
   }
-  size_t *size = ptr - ALIGNED_SIZE(sizeof(size_t));
-  *size = 0;
+  mem_arena_region_t **region = &arena->head, **prev = NULL;
+
+  /* find which region pointer belong */
+  while (*region != NULL && ptr >= (void *)(*region)->data &&
+         ptr < (void *)(*region)->data) {
+    prev = region;
+    region = (mem_arena_region_t **)&(*region)->next;
+  }
+
+  /* should not happend */
+  if (!*region) {
+    return;
+  }
+
+  /* no more last alloc */
+  if ((*region)->last_alloc == ptr) {
+    (*region)->last_alloc = NULL;
+  }
+
+  (*region)->alloc_cnt--;
+  if ((*region)->alloc_cnt <= 0) {
+    (*region)->alloc_cnt = 0;
+    (*region)->used = 0;
+    /* it's the only region so it gets reused next alloc */
+    if (*region == arena->head && (*region)->next == NULL) {
+      arena->tail = *region;
+      return;
+    }
+    /* disconnect region */
+    if (prev) {
+      *prev = (*region)->next;
+    }
+    (*region)->next = NULL;
+
+    /* put region after tail so it can get picked for allocation */
+    mem_arena_region_t *tail = arena->tail;
+    while (tail->next != NULL) {
+      tail = tail->next;
+    }
+    tail->next = *region;
+
+    if (*region == arena->head) {
+      arena->head = (*region)->next;
+    }
+  }
 }
 
 char *mem_strndup(mem_arena_t *arena, const char *string, size_t length) {
