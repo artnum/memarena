@@ -1,10 +1,13 @@
 
 #include "../src/include/memarena.h"
+#include <bits/time.h>
 #include <check.h>
+#include <iso646.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 #include <unistd.h>
 
 #define ALIGNED_SIZE(x)                                                        \
@@ -187,6 +190,137 @@ START_TEST(test_memarena_free_reuse_bug_region1) {
 }
 END_TEST
 
+START_TEST(test_mem_memsize) {
+  mem_arena_t *a = mem_arena_new(getpagesize());
+  ck_assert_ptr_nonnull(a);
+  for (int i = 1; i < 20; i++) {
+    void *ptr = mem_alloc(a, i * getpagesize());
+    ck_assert_ptr_nonnull(ptr);
+    ck_assert_int_eq(mem_memsize(a, ptr), i * getpagesize());
+  }
+
+  void *ptr = NULL;
+  for (int i = 1; i < 20; i++) {
+    ptr = mem_realloc(a, ptr, i * getpagesize());
+    ck_assert_ptr_nonnull(ptr);
+    ck_assert_int_eq(mem_memsize(a, ptr), i * getpagesize());
+  }
+  mem_arena_destroy(a);
+}
+END_TEST
+
+START_TEST(test_bigsize_bug) {
+  /* when doing big allocation, we likely to spot bug like the one where
+   * the region overhead was forgotten to be added
+   */
+
+  const size_t alloc_step = 1024 * 16; /* alloc in 16k step */
+  /* request small for arena creation */
+  mem_arena_t *a = mem_arena_new(1);
+
+  /* from 16k to 128m */
+  for (int i = 1; i < 80; i++) {
+    void *ptr = mem_alloc(a, i * alloc_step);
+    ck_assert_ptr_nonnull(ptr);
+  }
+
+  for (int i = 1; i < 80; i++) {
+    void *ptr = mem_alloc(a, i * alloc_step);
+    ck_assert_ptr_nonnull(ptr);
+    mem_free(a, ptr);
+  }
+
+  void *ptr = NULL;
+  for (int i = 1; i < 80; i++) {
+    ptr = mem_realloc(a, ptr, i * alloc_step);
+    ck_assert_ptr_nonnull(ptr);
+  }
+
+  mem_arena_destroy(a);
+}
+END_TEST
+
+START_TEST(test_performance) {
+  struct timespec start = {0}, end = {0};
+  long long unsigned int ns1 = 0, ns2 = 0;
+  const size_t alloc_step = 1024 * 16; /* alloc in 16k step */
+  /* request small for arena creation */
+  mem_arena_t *a = mem_arena_new(1);
+
+  /* from 16k to 128m */
+  for (int i = 1; i < 80; i++) {
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    void *ptr = mem_alloc(a, i * alloc_step);
+    mem_free(a, ptr);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    ns1 += end.tv_nsec - start.tv_nsec;
+  }
+
+  for (int i = 1; i < 80; i++) {
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    void *ptr = malloc(i * alloc_step);
+    free(ptr);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    ns2 += end.tv_nsec - start.tv_nsec;
+  }
+  ck_assert_int_lt(ns1, ns2);
+
+  /* new arena */
+  mem_arena_destroy(a);
+  a = mem_arena_new(1);
+
+  ns1 = 0;
+  ns2 = 0;
+  /* from 16k to 128m */
+  void *ptr = NULL;
+  for (int i = 1; i < 80; i++) {
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    ptr = mem_realloc(a, ptr, i * alloc_step);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    memset(ptr, i, i * alloc_step);
+    ns1 += end.tv_nsec - start.tv_nsec;
+  }
+  ptr = NULL;
+  for (int i = 1; i < 80; i++) {
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    ptr = realloc(ptr, i * alloc_step);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    memset(ptr, i, i * alloc_step);
+    ns2 += end.tv_nsec - start.tv_nsec;
+  }
+  free(ptr);
+  /* should be slower, as std realloc is better optimized */
+  ck_assert_int_gt(ns1, ns2);
+
+  /* if arena is tuned, should be faster */
+  mem_arena_destroy(a);
+  a = mem_arena_new(alloc_step * 80);
+
+  ns1 = 0;
+  ns2 = 0;
+  /* from 16k to 128m */
+  ptr = NULL;
+  for (int i = 1; i < 80; i++) {
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    ptr = mem_realloc(a, ptr, i * alloc_step);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    memset(ptr, i, i * alloc_step);
+    ns1 += end.tv_nsec - start.tv_nsec;
+  }
+  ptr = NULL;
+  for (int i = 1; i < 80; i++) {
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    ptr = realloc(ptr, i * alloc_step);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    memset(ptr, i, i * alloc_step);
+    ns2 += end.tv_nsec - start.tv_nsec;
+  }
+  free(ptr);
+  /* should be slower, as std realloc is better optimized */
+  ck_assert_int_lt(ns1, ns2);
+}
+END_TEST
+
 Suite *test_memarena_suite(void) {
   Suite *s;
   s = suite_create("Memarena Test");
@@ -216,6 +350,17 @@ Suite *test_memarena_suite(void) {
   tcase_add_test(tc_freereuse_bugr1, test_memarena_free_reuse_bug_region1);
   suite_add_tcase(s, tc_freereuse_bugr1);
 
+  TCase *tc_memsize = tcase_create("Memsize");
+  tcase_add_test(tc_memsize, test_mem_memsize);
+  suite_add_tcase(s, tc_memsize);
+
+  TCase *tc_bigize = tcase_create("Bigsize");
+  tcase_add_test(tc_memsize, test_bigsize_bug);
+  suite_add_tcase(s, tc_bigize);
+
+  TCase *tc_perf = tcase_create("Performance");
+  tcase_add_test(tc_perf, test_performance);
+  suite_add_tcase(s, tc_perf);
   return s;
 }
 

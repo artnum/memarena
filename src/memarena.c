@@ -1,5 +1,6 @@
 #include "include/memarena.h"
 #include <assert.h>
+#include <bits/time.h>
 #include <stdalign.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -7,12 +8,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <time.h>
 #include <unistd.h>
 
 #define ALIGNED_SIZE(x)                                                        \
   ((((x) + (MEMARENA_ALIGNMENT - 1)) / MEMARENA_ALIGNMENT) * MEMARENA_ALIGNMENT)
 #define REGION_FREE_SPACE(r)                                                   \
   ((r)->capacity - (r)->used - ALIGNED_SIZE(sizeof(size_t)))
+#define GET_SIZE_T_PTR_FROM_PTR(ptr)                                           \
+  (size_t *)((uint8_t *)(ptr) - ALIGNED_SIZE(sizeof(size_t)));
 
 /* an arena with 1 allocation will use that amount of data, at least :
  * -> the embedd arena structure
@@ -23,7 +27,7 @@
   (sizeof(mem_arena_t) + sizeof(mem_arena_region_t) + sizeof(size_t))
 #define MIN_OVERHEAD_RX (sizeof(mem_arena_region_t) + sizeof(size_t))
 
-static mem_arena_region_t *_new_region(int size, int pagesize) {
+static mem_arena_region_t *_new_region(size_t size, int pagesize) {
   size = ((size + pagesize - 1) / pagesize) * pagesize;
   mem_arena_region_t *region = mmap(NULL, size, PROT_READ | PROT_WRITE,
                                     MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
@@ -43,21 +47,22 @@ static mem_arena_region_t *_new_region(int size, int pagesize) {
 mem_arena_t *mem_arena_new(size_t size) {
   size_t pagesize = getpagesize();
   if (size == 0) {
-    size = getpagesize();
+    size = pagesize;
   }
   mem_arena_t *arena = NULL;
   mem_arena_region_t *region = _new_region(size + MIN_OVERHEAD_R0, pagesize);
   if (region) {
     size_t head_size = ALIGNED_SIZE(sizeof(*arena));
     arena = (mem_arena_t *)region->data;
-    region->data = (unsigned char *)region->data + head_size;
-    region->capacity -= head_size;
-
     memset(arena, 0, sizeof(*arena));
+
     arena->head = region;
     arena->tail = region;
     arena->pagesize = pagesize;
     arena->default_size = size + MIN_OVERHEAD_RX;
+
+    region->data = (unsigned char *)region->data + head_size;
+    region->capacity -= head_size;
   }
   return arena;
 }
@@ -143,43 +148,46 @@ void *mem_alloc(mem_arena_t *arena, size_t size) {
   if (!arena || size < 1) {
     return NULL;
   }
-  mem_arena_region_t **region = &arena->tail;
-  while (*region != NULL && REGION_FREE_SPACE(*region) < size) {
-    region = (mem_arena_region_t **)&(*region)->next;
+  mem_arena_region_t *region = NULL;
+  mem_arena_region_t *previous = NULL;
+
+  region = arena->tail;
+  while (region != NULL && REGION_FREE_SPACE(region) < size) {
+    previous = region;
+    region = (mem_arena_region_t *)region->next;
   }
-  if (*region == NULL) {
-    *region =
-        _new_region(arena->default_size < size ? size : arena->default_size,
+
+  if (region == NULL) {
+    region =
+        _new_region((arena->default_size < size ? size : arena->default_size) +
+                        MIN_OVERHEAD_RX,
                     arena->pagesize);
-    if (!arena->head) {
-      arena->head = *region;
-    }
   }
 
   uint8_t *ptr = NULL;
-  if (*region) {
-    *(size_t *)((*region)->data + (*region)->used) = size;
-    ptr = (*region)->data + (*region)->used + ALIGNED_SIZE(sizeof(size_t));
-    (*region)->used += size + ALIGNED_SIZE(sizeof(size_t));
-    (*region)->last_alloc = ptr;
-    (*region)->alloc_cnt++;
-    arena->tail = *region;
+  if (region) {
+    *(size_t *)(region->data + region->used) = size;
+    ptr = region->data + region->used + ALIGNED_SIZE(sizeof(size_t));
+    region->used += size + ALIGNED_SIZE(sizeof(size_t));
+    region->last_alloc = ptr;
+    region->alloc_cnt++;
+    arena->tail = region;
+    if (previous) {
+      previous->next = region;
+    }
   }
   return (void *)ptr;
 }
 
 void *mem_realloc(mem_arena_t *arena, void *ptr, size_t new_size) {
-  if (arena == NULL) {
+  if (arena == NULL || new_size < 1) {
     return NULL;
   }
   if (ptr == NULL) {
     return mem_alloc(arena, new_size);
   }
 
-  size_t *old_size = (size_t *)((uint8_t *)ptr - ALIGNED_SIZE(sizeof(size_t)));
-  if (new_size < 1) {
-    return NULL;
-  }
+  size_t *old_size = GET_SIZE_T_PTR_FROM_PTR(ptr);
   if (*old_size > new_size) {
     *old_size = new_size;
     return ptr;
@@ -187,7 +195,7 @@ void *mem_realloc(mem_arena_t *arena, void *ptr, size_t new_size) {
 
   for (mem_arena_region_t *r = arena->head; r;
        r = (mem_arena_region_t *)r->next) {
-    if (r->last_alloc == ptr && REGION_FREE_SPACE(r) >= new_size) {
+    if (r->last_alloc == ptr && REGION_FREE_SPACE(r) >= new_size - *old_size) {
       r->used += new_size - *old_size;
       *old_size = new_size;
       return ptr;
@@ -207,15 +215,24 @@ void *mem_realloc(mem_arena_t *arena, void *ptr, size_t new_size) {
  */
 static void _move_empty_region_to_end(mem_arena_t *arena,
                                       mem_arena_region_t *region,
-                                      mem_arena_region_t **prev) {
+                                      mem_arena_region_t *prev) {
+  /* alread tail so we done */
+  if (arena->tail == region) {
+    return;
+  }
+
   /* it's the only region so it gets reused next alloc */
   if (region == arena->head && region->next == NULL) {
+    if (arena->tail != region && arena->tail != NULL) {
+      arena->tail->next = region;
+    }
     arena->tail = region;
     return;
   }
+
   /* disconnect region */
   if (prev) {
-    *prev = region->next;
+    prev->next = region->next;
   }
   region->next = NULL;
 
@@ -236,39 +253,40 @@ void mem_free(mem_arena_t *arena, void *ptr) {
     return;
   }
 
-  mem_arena_region_t **region = &arena->head, **prev = NULL;
+  mem_arena_region_t *region = arena->head, *prev = NULL;
 
   /* find which region pointer belong */
-  while (*region != NULL &&
-         !(ptr >= (void *)(*region)->data &&
-           ptr < (void *)((*region)->data + (*region)->used))) {
+  while (region != NULL && !(ptr >= (void *)region->data &&
+                             ptr < (void *)(region->data + region->used))) {
     prev = region;
-    region = (mem_arena_region_t **)&(*region)->next;
+    region = (mem_arena_region_t *)region->next;
   }
   /* ptr doesn't belong to us */
-  if (*region == NULL) {
+  if (region == NULL) {
     return;
   }
 
-  if ((*region)->last_alloc == ptr) {
-    size_t *old_size =
-        (size_t *)((uint8_t *)ptr - ALIGNED_SIZE(sizeof(size_t)));
-    (*region)->used -= *old_size;
-    (*region)->alloc_cnt--;
-    (*region)->last_alloc = NULL;
-    if ((*region)->alloc_cnt <= 0) {
-      _move_empty_region_to_end(arena, *region, prev);
+  if (region->last_alloc == ptr) {
+    size_t *old_size = GET_SIZE_T_PTR_FROM_PTR(ptr);
+    /* use count the head size, so we should remove it */
+    region->used -= (*old_size + ALIGNED_SIZE(sizeof(size_t)));
+    region->alloc_cnt--;
+    region->last_alloc = NULL;
+    if (region->alloc_cnt <= 0) {
+      _move_empty_region_to_end(arena, region, prev);
     }
     return;
   }
 
-  (*region)->alloc_cnt--;
-  if ((*region)->alloc_cnt <= 0) {
-    (*region)->alloc_cnt = 0;
-    (*region)->used = 0;
-    _move_empty_region_to_end(arena, *region, prev);
+  region->alloc_cnt--;
+  if (region->alloc_cnt <= 0) {
+    region->alloc_cnt = 0;
+    region->used = 0;
+    _move_empty_region_to_end(arena, region, prev);
   }
 }
+
+/* *** String function *** */
 
 char *mem_strndup(mem_arena_t *arena, const char *string, size_t length) {
   if (arena == NULL || string == NULL || length == 0) {
@@ -301,6 +319,8 @@ char *mem_strdup(mem_arena_t *arena, const char *string) {
   return new_str;
 }
 
+/* *** Utility function *** */
+
 void *mem_memdup(mem_arena_t *arena, const void *ptr, size_t length) {
   if (arena == NULL || ptr == NULL || length <= 0) {
     return 0;
@@ -310,4 +330,11 @@ void *mem_memdup(mem_arena_t *arena, const void *ptr, size_t length) {
     memcpy(new_ptr, ptr, length);
   }
   return new_ptr;
+}
+
+size_t mem_memsize(mem_arena_t *arena, const void *ptr) {
+  if (ptr == NULL || arena == NULL) {
+    return 0;
+  }
+  return *GET_SIZE_T_PTR_FROM_PTR(ptr);
 }

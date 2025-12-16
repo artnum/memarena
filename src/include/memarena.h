@@ -1,6 +1,7 @@
 #ifndef MEMARENA_H__
 #define MEMARENA_H__
 
+#include <iso646.h>
 #ifndef MEMARENA_ALIGNMENT
 #define MEMARENA_ALIGNMENT sizeof(max_align_t)
 #endif /* MEMARENA_ALIGNMENT */
@@ -25,6 +26,7 @@ typedef struct {
   mem_arena_region_t *tail;
 } mem_arena_t;
 
+/* *** Arena init and destroy *** */
 /**
  * Create a new arena.
  *
@@ -83,6 +85,8 @@ void mem_arena_destroy(mem_arena_t *arena);
  */
 void mem_arena_dump(mem_arena_t *arena);
 
+/* *** Allocation, free, ... *** */
+
 /** Malloc but with arena */
 void *mem_alloc(mem_arena_t *arena, size_t size);
 /** Realloc but with arena */
@@ -98,11 +102,24 @@ void *mem_realloc(mem_arena_t *arena, void *ptr, size_t new_size);
  */
 void mem_free(mem_arena_t *arena, void *ptr);
 
+/* *** String function *** */
+
 /** Strndup but with arena */
 char *mem_strndup(mem_arena_t *arena, const char *string, size_t length);
 /** Strdup but with arena */
 char *mem_strdup(mem_arena_t *arena, const char *string);
 
-/** */
+/* *** Utility function *** */
+
+/** Duplicate memory */
 void *mem_memdup(mem_arena_t *arena, const void *ptr, size_t length);
+
+/** Get the size of the allocated memory
+ *
+ * \param arena The arena where ptr belong
+ * \param ptr   The pointer to memory we want size of
+ *
+ * \return The size of the allocated memory
+ */
+size_t mem_memsize(mem_arena_t *arena, const void *ptr);
 #endif /* MEMARENA_H__ */
