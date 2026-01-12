@@ -152,7 +152,8 @@ void *mem_alloc(mem_arena_t *arena, size_t size) {
   mem_arena_region_t *previous = NULL;
 
   region = arena->tail;
-  while (region != NULL && REGION_FREE_SPACE(region) < size) {
+  while (region != NULL &&
+         REGION_FREE_SPACE(region) < size + ALIGNED_SIZE(sizeof(size_t))) {
     previous = region;
     region = (mem_arena_region_t *)region->next;
   }
